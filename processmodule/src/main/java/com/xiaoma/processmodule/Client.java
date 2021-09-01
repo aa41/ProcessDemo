@@ -10,16 +10,17 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
-import android.os.Process;
 import android.os.RemoteException;
-import android.util.Log;
 
 import androidx.annotation.NonNull;
 
 import com.xiaoma.processmodule.interfaces.IHandleMessage;
 import com.xiaoma.processmodule.ipc.ProcessService;
+import com.xiaoma.processmodule.utils.ProcessUtils;
 
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class Client implements IHandleMessage, ServiceConnection, IBinder.DeathRecipient {
     private Messenger messenger;
@@ -28,20 +29,22 @@ public class Client implements IHandleMessage, ServiceConnection, IBinder.DeathR
     private IProcessInterfaces stub;
     private volatile boolean isBind = false;
     private Bundle bundle;
+    private volatile long version = 0;
+    private volatile Integer pid;
+    private Boolean isMainProcess;
 
+    private Map<Long, IHandleMessage> callbackMap = new ConcurrentHashMap<>();
 
     private Client() {
         handler = new ClientHandler(this, Looper.getMainLooper());
         messenger = new Messenger(handler);
     }
 
-    public void attachContext(Context context) {
-        this.context = context.getApplicationContext();
-    }
 
-    public void bindService(Bundle bundle) {
+    public void bindService(Context context, Bundle bundle) {
         if (context == null) return;
         if (isBind()) return;
+        this.context = context.getApplicationContext();
         this.bundle = bundle;
         Intent intent = new Intent(context, ProcessService.class);
         context.bindService(intent, this, Context.BIND_AUTO_CREATE);
@@ -49,7 +52,31 @@ public class Client implements IHandleMessage, ServiceConnection, IBinder.DeathR
     }
 
     public void sendMessage(Message message) {
+        sendMessage(message, null);
+    }
+
+    public synchronized void sendMessage(Message message, IHandleMessage callback) {
         message.replyTo = messenger;
+        Bundle data = message.getData();
+        if (data == null) {
+            data = new Bundle();
+        }
+        final long version = getVersion();
+        data.putLong(Const.VERSION, version);
+        if (pid == null || pid <= 0) {
+            pid = android.os.Process.myPid();
+        }
+        if (isMainProcess == null) {
+            isMainProcess = ProcessUtils.isMainProcess(context);
+        }
+        data.putInt(Const.PID_KEY, pid);
+        data.putBoolean(Const.MAIN_PROCESS, isMainProcess);
+        message.setData(data);
+
+        if (callback != null) {
+            callbackMap.put(version, callback);
+        }
+
         if (stub != null) {
             try {
                 stub.handleMessage(message);
@@ -65,8 +92,6 @@ public class Client implements IHandleMessage, ServiceConnection, IBinder.DeathR
 
     @Override
     public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
-        Log.e("1111111111111111", "onServiceConnected---pid:" + Process.myPid());
-
         stub = IProcessInterfaces.Stub.asInterface(iBinder);
         isBind = true;
         try {
@@ -89,12 +114,11 @@ public class Client implements IHandleMessage, ServiceConnection, IBinder.DeathR
 
     @Override
     public void binderDied() {
-        Log.e("1111111111111111", "binderDied");
         if (stub != null) {
             stub.asBinder().unlinkToDeath(this, 0);
             stub = null;
             isBind = false;
-            bindService(bundle);
+            bindService(context, bundle);
         }
     }
 
@@ -116,14 +140,26 @@ public class Client implements IHandleMessage, ServiceConnection, IBinder.DeathR
 
 
     @Override
-    public void handleMessage(Messenger messenger,Message msg) {
-        Log.e("1111111111111111", "client:" + msg.what);
+    public Message handleMessage(Message msg) {
         List<IHandleMessage> messagesCallbacks = ProcessApi.getInstance().getClientMessagesCallbacks();
-        for (IHandleMessage iHandleMessage : messagesCallbacks) {
-            if (iHandleMessage != null) {
-                iHandleMessage.handleMessage(messenger,msg);
+        if (msg != null && msg.getData() != null) {
+            final long version = msg.getData().getLong(Const.VERSION);
+            final IHandleMessage callback = callbackMap.get(version);
+            if (callback != null) {
+                callback.handleMessage(msg);
             }
         }
+        for (IHandleMessage iHandleMessage : messagesCallbacks) {
+            if (iHandleMessage != null) {
+                iHandleMessage.handleMessage(msg);
+            }
+        }
+        return null;
+    }
+
+    public synchronized long getVersion() {
+        version++;
+        return version;
     }
 
     private static class ClientHandler extends Handler {
@@ -138,7 +174,7 @@ public class Client implements IHandleMessage, ServiceConnection, IBinder.DeathR
         public void handleMessage(@NonNull Message msg) {
             super.handleMessage(msg);
             if (client != null) {
-                client.handleMessage(client.messenger,msg);
+                client.handleMessage(msg);
             }
         }
     }

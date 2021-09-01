@@ -16,7 +16,6 @@ public class ProcessApi {
     private List<IHandleMessage> clientMessagesCallbacks = new CopyOnWriteArrayList<>();
 
 
-
     public static ProcessApi getInstance() {
         return INNER.INSTANCE;
     }
@@ -27,8 +26,7 @@ public class ProcessApi {
 
 
     public void clientInit(Context context, Bundle bundle) {
-        Client.getInstance().attachContext(context);
-        Client.getInstance().bindService(bundle);
+        Client.getInstance().bindService(context, bundle);
     }
 
     public void clientInit(Context context) {
@@ -55,25 +53,22 @@ public class ProcessApi {
         clientMessagesCallbacks.remove(iHandleMessage);
     }
 
-    public void serviceInit(IServiceInit iServiceInit){
-        this.iServiceInit =iServiceInit;
+    public void serviceInit(IServiceInit iServiceInit) {
+        this.iServiceInit = iServiceInit;
     }
 
-    public IServiceInit getServiceInit(){
+    public IServiceInit getServiceInit() {
         return iServiceInit;
     }
 
 
-    public List<IHandleMessage> getServiceMessagesCallbacks(){
+    public List<IHandleMessage> getServiceMessagesCallbacks() {
         return ServiceMessagesCallbacks;
     }
 
-    public List<IHandleMessage> getClientMessagesCallbacks(){
+    public List<IHandleMessage> getClientMessagesCallbacks() {
         return clientMessagesCallbacks;
     }
-
-
-
 
 
 }

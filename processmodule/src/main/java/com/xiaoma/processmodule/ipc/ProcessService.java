@@ -17,10 +17,12 @@ import com.xiaoma.processmodule.interfaces.IHandleMessage;
 import com.xiaoma.processmodule.interfaces.IServiceInit;
 
 import java.util.List;
+import java.util.WeakHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-public class ProcessService extends Service implements IBinder.DeathRecipient {
-    private Messenger clientMessenger;
+public class ProcessService extends Service {
+
+    private WeakHashMap<Messenger, Long> messengerCache = new WeakHashMap<>();
 
 
     @Nullable
@@ -33,13 +35,26 @@ public class ProcessService extends Service implements IBinder.DeathRecipient {
     IProcessInterfaces stub = new IProcessInterfaces.Stub() {
         @Override
         public void handleMessage(Message message) throws RemoteException {
-            if (clientMessenger == null) {
-                clientMessenger = message.replyTo;
-                clientMessenger.getBinder().linkToDeath(ProcessService.this, 0);
+            final Messenger messenger = message.replyTo;
+            final Bundle data = message.getData();
+            final long pid = data.getLong(Const.PID_KEY);
+            final boolean mainProcess = data.getBoolean(Const.MAIN_PROCESS, false);
+            if (messengerCache.get(messenger) == null) {
+                messengerCache.put(messenger, pid);
+                messenger.getBinder().linkToDeath(new DeathRecipient() {
+                    @Override
+                    public void binderDied() {
+                        messenger.getBinder().unlinkToDeath(this, 0);
+                        messengerCache.remove(messenger);
+                        if (mainProcess) {
+                            System.exit(0);
+                        }
+                    }
+                }, 0);
             }
+
             switch (message.what) {
                 case Const.INIT_CODE:
-                    Bundle data = message.getData();
                     IServiceInit serviceInit = ProcessApi.getInstance().getServiceInit();
                     if (serviceInit != null) {
                         serviceInit.init(data);
@@ -49,7 +64,10 @@ public class ProcessService extends Service implements IBinder.DeathRecipient {
                     List<IHandleMessage> messagesCallbacks = ProcessApi.getInstance().getServiceMessagesCallbacks();
                     for (IHandleMessage iHandleMessage : messagesCallbacks) {
                         if (iHandleMessage != null) {
-                            iHandleMessage.handleMessage(clientMessenger,message);
+                            final Message msg = iHandleMessage.handleMessage(message);
+                            if(messenger != null){
+                                messenger.send(msg);
+                            }
                         }
                     }
             }
@@ -60,9 +78,4 @@ public class ProcessService extends Service implements IBinder.DeathRecipient {
         }
     };
 
-    @Override
-    public void binderDied() {
-        clientMessenger.getBinder().unlinkToDeath(this, 0);
-        System.exit(0);
-    }
 }
